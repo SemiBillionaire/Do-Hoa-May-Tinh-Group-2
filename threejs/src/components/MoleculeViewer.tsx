@@ -21,9 +21,9 @@ function ionFromObjectName(name: string): string | null {
     case "O":
       return "O²⁻";
     case "N":
-      return "N³⁻";
+      return "N⁵⁺";
     case "S":
-      return "S²⁻";
+      return "S⁶⁺";
     default:
       return null;
   }
