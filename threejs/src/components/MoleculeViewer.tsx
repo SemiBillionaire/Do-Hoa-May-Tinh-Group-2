@@ -8,6 +8,27 @@ type Props = {
   className?: string;
 };
 
+function ionFromObjectName(name: string): string | null {
+  const n = name.trim();
+
+  // Prefer exact element symbols first
+  if (/cl/i.test(n)) return "Cl⁻";
+
+  const first = n[0]?.toUpperCase();
+  switch (first) {
+    case "H":
+      return "H⁺";
+    case "O":
+      return "O²⁻";
+    case "N":
+      return "N³⁻";
+    case "S":
+      return "S²⁻";
+    default:
+      return null;
+  }
+}
+
 function stripBlenderLabels(object3d: THREE.Object3D) {
   const toRemove: THREE.Object3D[] = [];
   object3d.traverse((o) => {
@@ -47,11 +68,37 @@ export function MoleculeViewer({ url, className }: Props) {
     const host = hostRef.current;
     if (!host) return;
 
+    // Don't override layout (host can be `absolute inset-0`).
+    // Only ensure a positioning context for the tooltip if it's currently `static`.
+    if (getComputedStyle(host).position === "static") {
+      host.style.position = "relative";
+    }
+
     const canvas = document.createElement("canvas");
     canvas.style.display = "block";
     canvas.style.width = "100%";
     canvas.style.height = "100%";
     host.appendChild(canvas);
+
+    // Tooltip
+    const tooltip = document.createElement("div");
+    tooltip.style.position = "absolute";
+    tooltip.style.left = "0px";
+    tooltip.style.top = "0px";
+    tooltip.style.transform = "translate(-9999px, -9999px)";
+    tooltip.style.padding = "10px 12px";
+    tooltip.style.borderRadius = "10px";
+    // ~70% transparency
+    tooltip.style.background = "rgba(10, 4, 18, 0.30)";
+    tooltip.style.border = "1px solid rgba(120, 220, 220, 0.25)";
+    tooltip.style.color = "rgba(246, 241, 236, 0.92)";
+    tooltip.style.fontSize = "16px";
+    tooltip.style.fontWeight = "800";
+    tooltip.style.lineHeight = "1.15";
+    tooltip.style.pointerEvents = "none";
+    tooltip.style.whiteSpace = "nowrap";
+    tooltip.style.backdropFilter = "blur(6px)";
+    host.appendChild(tooltip);
 
     const renderer = new THREE.WebGLRenderer({
       canvas,
@@ -95,6 +142,11 @@ export function MoleculeViewer({ url, className }: Props) {
     let dirty = true;
     controls.addEventListener("change", () => (dirty = true));
 
+    const raycaster = new THREE.Raycaster();
+    const mouseNdc = new THREE.Vector2();
+    /** @type {THREE.Object3D | null} */
+    let modelRoot: THREE.Object3D | null = null;
+
     const loader = new GLTFLoader();
     loader.load(
       url,
@@ -104,6 +156,7 @@ export function MoleculeViewer({ url, className }: Props) {
         stripBlenderLabels(model);
         root.clear();
         root.add(model);
+        modelRoot = model;
         frameCameraToObject(camera, controls, model);
         dirty = true;
       },
@@ -112,6 +165,42 @@ export function MoleculeViewer({ url, className }: Props) {
         // keep empty; host still shows background overlay
       }
     );
+
+    const onPointerMove = (ev: PointerEvent) => {
+      if (!modelRoot) return;
+      const rect = host.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+
+      mouseNdc.x = (x / rect.width) * 2 - 1;
+      mouseNdc.y = -(y / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouseNdc, camera);
+
+      const hits = raycaster.intersectObject(modelRoot, true);
+      const hit = hits.find((h) => (h.object as any)?.isMesh);
+      const name = hit?.object?.name || "";
+      const ion = name ? ionFromObjectName(name) : null;
+
+      if (!ion) {
+        tooltip.style.transform = "translate(-9999px, -9999px)";
+        return;
+      }
+
+      tooltip.textContent = ion;
+      // Offset from cursor, clamp inside host
+      const ox = 14;
+      const oy = 14;
+      const tx = Math.min(Math.max(8, x + ox), rect.width - 8);
+      const ty = Math.min(Math.max(8, y + oy), rect.height - 8);
+      tooltip.style.transform = `translate(${tx}px, ${ty}px)`;
+    };
+
+    const onPointerLeave = () => {
+      tooltip.style.transform = "translate(-9999px, -9999px)";
+    };
+
+    host.addEventListener("pointermove", onPointerMove);
+    host.addEventListener("pointerleave", onPointerLeave);
 
     const ro = new ResizeObserver(() => {
       const w = host.clientWidth;
@@ -136,6 +225,8 @@ export function MoleculeViewer({ url, className }: Props) {
 
     return () => {
       disposed = true;
+      host.removeEventListener("pointermove", onPointerMove);
+      host.removeEventListener("pointerleave", onPointerLeave);
       cancelAnimationFrame(raf);
       ro.disconnect();
       controls.dispose();
